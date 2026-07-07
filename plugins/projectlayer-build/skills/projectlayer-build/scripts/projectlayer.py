@@ -44,11 +44,21 @@ def _fail(message: str, code: int = 1):
 
 
 def _token() -> str:
-    token = os.environ.get("PROJECTLAYER_API_TOKEN")
+    # Two supported sources, in priority order:
+    #  1. PROJECTLAYER_API_TOKEN — an explicit env var, for CLI/CI or power users who
+    #     want to override the configured value.
+    #  2. CLAUDE_PLUGIN_OPTION_PROJECTLAYER_API_TOKEN — injected by Claude Code from the
+    #     plugin's userConfig prompt (stored securely in the OS keychain). This is how a
+    #     normal user supplies the token: they paste it once when enabling the plugin.
+    token = (
+        os.environ.get("PROJECTLAYER_API_TOKEN")
+        or os.environ.get("CLAUDE_PLUGIN_OPTION_PROJECTLAYER_API_TOKEN")
+    )
     if not token:
         _fail(
-            "PROJECTLAYER_API_TOKEN is not set. Create a scoped API token in "
-            "ProjectLayer (Settings) and export it, e.g.:\n"
+            "No ProjectLayer API token found. If you installed this as a plugin, enable it "
+            "and paste your token when prompted (Claude Code stores it securely). Otherwise "
+            "set it in your environment:\n"
             "    export PROJECTLAYER_API_TOKEN=pl_live_xxx"
         )
     return token

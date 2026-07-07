@@ -37,15 +37,20 @@ actually done here* — reconcile the two rather than following either blindly.
 
 ## Prerequisites
 
-The bundled script talks to the API. It needs a token:
+The bundled script talks to the API. It needs a write-scoped ProjectLayer API token, which
+it reads from either of these (checked in this order):
 
-```bash
-export PROJECTLAYER_API_TOKEN=pl_live_xxx   # scoped API token from ProjectLayer → Settings
-```
+1. `PROJECTLAYER_API_TOKEN` — an environment variable (for CLI/CI or manual use).
+2. `CLAUDE_PLUGIN_OPTION_PROJECTLAYER_API_TOKEN` — injected automatically by Claude Code
+   when the plugin is installed: the user is prompted for the token on enable and it's
+   stored securely in the OS keychain. Normal users don't set anything by hand.
 
-If `PROJECTLAYER_API_TOKEN` is unset, the script says so with instructions — surface that
-to the user rather than trying to guess a token. The plugin targets the hosted ProjectLayer
-SaaS at `https://projectlayer.app` only; the API base URL is fixed and not configurable.
+If neither is present the script explains how to supply one — surface that to the user
+rather than trying to guess a token. If you installed the plugin but were never prompted,
+re-enable it (`/plugin` → Installed → enable) to trigger the config prompt.
+
+The plugin targets the hosted ProjectLayer SaaS at `https://projectlayer.app` only; the API
+base URL is fixed and not configurable.
 
 The write operations (`set-plan`, `update-status`) require a token with the **write**
 scope. If one comes back `403 Forbidden`, the token is read-only — tell the user to issue a

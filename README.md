@@ -47,8 +47,15 @@ Authors development plans from a [ProjectLayer.app](https://projectlayer.app) ta
 description and builds the code from a plan, keeping the task's status in sync via the
 ProjectLayer REST API.
 
-**Setup:** set a **write-scoped** API token from your
-[projectlayer.app](https://projectlayer.app) account (Settings → API):
+**Setup:** you need a **write-scoped** API token from your
+[projectlayer.app](https://projectlayer.app) account (Settings → API).
+
+When you install the plugin, Claude Code **prompts you for the token** and stores it
+securely in your OS keychain — nothing to configure by hand. (Not prompted? Re-enable the
+plugin from `/plugin` → **Installed**.)
+
+If you'd rather supply it yourself — e.g. for CI or scripting — set an environment variable
+instead, which takes precedence over the prompt:
 
 ```bash
 export PROJECTLAYER_API_TOKEN=pl_live_xxx

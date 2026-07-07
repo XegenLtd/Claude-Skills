@@ -1,10 +1,19 @@
 {
   "name": "projectlayer-build",
   "description": "Author development plans from ProjectLayer.app tasks and build the code from them, keeping task status in sync via the ProjectLayer REST API.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": {
     "name": "Xegen",
     "email": "jay@xegen.co.uk"
   },
-  "homepage": "https://projectlayer.app"
+  "homepage": "https://projectlayer.app",
+  "userConfig": {
+    "projectlayer_api_token": {
+      "type": "string",
+      "title": "ProjectLayer API token",
+      "description": "Your write-scoped ProjectLayer API token from projectlayer.app (Settings → API). Starts with pl_live_.",
+      "sensitive": true,
+      "required": true
+    }
+  }
 }
