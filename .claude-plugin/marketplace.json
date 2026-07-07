@@ -5,15 +5,12 @@
     "email": "jay@xegen.co.uk"
   },
   "description": "Xegen's Claude Code skills and tooling, including ProjectLayer.app integration.",
-  "metadata": {
-    "pluginRoot": "./plugins"
-  },
   "plugins": [
     {
       "name": "projectlayer-build",
-      "source": "projectlayer-build",
+      "source": "./plugins/projectlayer-build",
       "description": "Author development plans from ProjectLayer.app tasks and build the code from them, keeping task status in sync via the ProjectLayer REST API.",
-      "version": "0.1.0",
+      "version": "1.0.0",
       "author": {
         "name": "Xegen"
       },
