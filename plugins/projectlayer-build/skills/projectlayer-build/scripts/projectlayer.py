@@ -8,7 +8,7 @@ once here — with clear, actionable error messages — keeps the skill's own in
 focused on authoring and building plans rather than on HTTP plumbing.
 
 Auth:  reads the bearer token from the PROJECTLAYER_API_TOKEN environment variable.
-Base:  defaults to https://projectlayer.app/api/v1, override with PROJECTLAYER_BASE_URL.
+Base:  the live ProjectLayer SaaS at https://projectlayer.app/api/v1 (fixed).
 
 Usage:
   python projectlayer.py list-projects
@@ -31,7 +31,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-DEFAULT_BASE_URL = "https://projectlayer.app/api/v1"
+# The plugin targets the hosted ProjectLayer SaaS only. There is no self-hosted edition,
+# so the base URL is fixed rather than configurable.
+BASE_URL = "https://projectlayer.app/api/v1"
 
 
 def _fail(message: str, code: int = 1):
@@ -52,17 +54,13 @@ def _token() -> str:
     return token
 
 
-def _base_url() -> str:
-    return os.environ.get("PROJECTLAYER_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
-
-
 def _request(method: str, path: str, params: dict | None = None, body: dict | None = None):
-    """{method} {base}{path} with bearer auth, returning parsed JSON.
+    """{method} {BASE_URL}{path} with bearer auth, returning parsed JSON.
 
     Errors are translated into guidance the skill can act on: a 401 means the token
     is bad, a 404 means the task/project doesn't exist, a 400 means the payload was
     rejected (e.g. an unknown status value), etc."""
-    url = f"{_base_url()}{path}"
+    url = f"{BASE_URL}{path}"
     if params:
         # Drop None values so optional filters simply don't appear in the query string.
         clean = {k: v for k, v in params.items() if v is not None}
@@ -98,7 +96,7 @@ def _request(method: str, path: str, params: dict | None = None, body: dict | No
             _fail(f"404 Not Found — {url} does not exist (check the id/task key).")
         _fail(f"HTTP {e.code} from {url}: {body or e.reason}")
     except urllib.error.URLError as e:
-        _fail(f"Could not reach {url}: {e.reason}. Check network and PROJECTLAYER_BASE_URL.")
+        _fail(f"Could not reach {url}: {e.reason}. Check your network connection.")
     except json.JSONDecodeError:
         _fail(f"Response from {url} was not valid JSON.")
 

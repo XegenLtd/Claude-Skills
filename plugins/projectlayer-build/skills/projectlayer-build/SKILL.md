@@ -44,9 +44,8 @@ export PROJECTLAYER_API_TOKEN=pl_live_xxx   # scoped API token from ProjectLayer
 ```
 
 If `PROJECTLAYER_API_TOKEN` is unset, the script says so with instructions — surface that
-to the user rather than trying to guess a token. Base URL defaults to
-`https://projectlayer.app/api/v1`; override with `PROJECTLAYER_BASE_URL` for self-hosted
-instances.
+to the user rather than trying to guess a token. The plugin targets the hosted ProjectLayer
+SaaS at `https://projectlayer.app` only; the API base URL is fixed and not configurable.
 
 The write operations (`set-plan`, `update-status`) require a token with the **write**
 scope. If one comes back `403 Forbidden`, the token is read-only — tell the user to issue a
