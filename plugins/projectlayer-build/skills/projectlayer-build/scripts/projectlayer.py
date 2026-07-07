@@ -50,9 +50,13 @@ def _token() -> str:
     #  2. CLAUDE_PLUGIN_OPTION_PROJECTLAYER_API_TOKEN — injected by Claude Code from the
     #     plugin's userConfig prompt (stored securely in the OS keychain). This is how a
     #     normal user supplies the token: they paste it once when enabling the plugin.
+    # Strip whitespace: a trailing newline or space (common with copy-paste or
+    # `export X=$(cat file)`) would otherwise be sent in the Authorization header and
+    # rejected as a 401, which looks confusingly like a bad key. Treat whitespace-only
+    # as unset so the user gets the "no token" guidance instead.
     token = (
-        os.environ.get("PROJECTLAYER_API_TOKEN")
-        or os.environ.get("CLAUDE_PLUGIN_OPTION_PROJECTLAYER_API_TOKEN")
+        (os.environ.get("PROJECTLAYER_API_TOKEN") or "").strip()
+        or (os.environ.get("CLAUDE_PLUGIN_OPTION_PROJECTLAYER_API_TOKEN") or "").strip()
     )
     if not token:
         _fail(
