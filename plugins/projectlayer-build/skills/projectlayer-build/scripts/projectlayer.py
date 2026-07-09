@@ -35,6 +35,12 @@ import urllib.request
 # so the base URL is fixed rather than configurable.
 BASE_URL = "https://projectlayer.app/api/v1"
 
+# Task keys are resolved by paging through the task list (the API has no by-key lookup).
+# PAGE_SIZE keeps requests few; MAX_PAGES is a safety net against an endless loop if the
+# API ever returns malformed pagination metadata.
+PAGE_SIZE = 100
+MAX_PAGES = 1000
+
 
 def _fail(message: str, code: int = 1):
     """Print a clear, actionable error and exit. The skill reads stderr to explain
@@ -137,30 +143,50 @@ def cmd_list_tasks(args):
     _print(_get("/tasks", params))
 
 
+def _unwrap(resp):
+    """The list endpoint wraps results as {"data": [...], "meta": {...}}. Return
+    (items, meta), tolerating a bare list or a legacy "tasks" key."""
+    if isinstance(resp, dict):
+        return (resp.get("data") or resp.get("tasks") or [], resp.get("meta") or {})
+    return (resp or [], {})
+
+
 def _resolve_task_id(ident: str) -> str:
-    """Accept either a numeric id (42) or a task key (API-42) and return the numeric
-    id as a string. Task endpoints are keyed by numeric id, so a key is resolved by
-    scanning the task list."""
+    """Accept either a numeric id (42) or a task key (e.g. API-42, RSPH-14) and return
+    the numeric id as a string.
+
+    Task endpoints are keyed by numeric id and the API offers no by-key lookup or filter,
+    so a key is resolved by paging through the task list until it matches. Task-key
+    prefixes are user-defined per project, so nothing here assumes a particular prefix —
+    the given key is matched case-insensitively against each task's `task_key`."""
     if ident.isdigit():
         return ident
 
-    tasks = _get("/tasks")
-    # The list endpoint wraps results as {"data": [...]}; fall back gracefully if
-    # the shape ever changes to a bare list or a "tasks" key.
-    if isinstance(tasks, dict):
-        items = tasks.get("data") or tasks.get("tasks") or []
-    else:
-        items = tasks
-    match = next(
-        (t for t in items if str(t.get("task_key", "")).lower() == ident.lower()),
-        None,
+    target = ident.lower()
+    page = 1
+    pages_scanned = 0
+    while True:
+        items, meta = _unwrap(_get("/tasks", {"per_page": PAGE_SIZE, "page": page}))
+        for t in items:
+            if str(t.get("task_key", "")).lower() == target:
+                return str(t["id"])
+        pages_scanned += 1
+
+        total_pages = meta.get("total_pages")
+        if total_pages is not None:
+            if page >= total_pages:
+                break
+        elif len(items) < PAGE_SIZE:
+            # No pagination metadata: a short or empty page means we've hit the end.
+            break
+        if pages_scanned >= MAX_PAGES:
+            break
+        page += 1
+
+    _fail(
+        f"No task with key '{ident}' found after scanning {pages_scanned} page(s) of "
+        "tasks. Check the key is correct, or pass the numeric task id instead."
     )
-    if not match:
-        _fail(
-            f"No task with key '{ident}' found in the first page of tasks. "
-            "Pass the numeric id instead, or narrow with list-tasks --project N."
-        )
-    return str(match["id"])
 
 
 def cmd_get_task(args):

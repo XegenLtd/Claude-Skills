@@ -233,7 +233,11 @@ Then summarize concisely:
     the plan field. Storing a plan stamps `plan_updated_at`, flips `has_plan` to true, and
     clears any in-progress/errored planning state; sending an empty string would clear the
     plan, which is why `set-plan` refuses empty input. Requires the write scope.
-- `list-tasks` returns up to 100 tasks (newest first) and does **not** include the plan text —
+- Task keys can use **any prefix** — prefixes are defined per project by the user (`RSPH-14`,
+  `API-42`, `ACME-3`, …). Commands accept a numeric id or a key; the script matches the key
+  case-insensitively and, since the API has no by-key lookup, pages through the whole task
+  list to find it. So a valid key resolves regardless of prefix or how far back the task is.
+- `list-tasks` returns a page of tasks (newest first) and does **not** include the plan text —
   only `get-task` does. So: list to find the id, then get to read the plan.
 - Keep the API interaction to the bundled script. If you hit an endpoint the script doesn't
   cover, prefer extending the script over ad-hoc `curl`, so error handling stays consistent.
