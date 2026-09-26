@@ -8,19 +8,25 @@ description: >-
   task that lives in ProjectLayer — even without naming the API (e.g. "write a plan for
   ticket 42", "draft a plan from the description and push it back", "implement the next
   planned task", "pull my plan and start coding"). It reads projects/tasks/descriptions,
-  drafts a plan and writes it back to the task, builds the code locally, and keeps the
-  task's status in sync (in_progress when work begins, done once built and verified).
+  drafts a plan and writes it back to the task, builds the code locally, writes
+  plain-language test steps and hands the task over for testing, fixes tasks that
+  failed testing, and keeps the task's status in sync (in_progress while building,
+  testing once built and verified).
 compatibility: Requires the PROJECTLAYER_API_TOKEN environment variable and network access to projectlayer.app.
 ---
 
 # ProjectLayer Build
 
-This skill covers the full plan lifecycle on a ProjectLayer task, in two flows:
+This skill covers the full plan lifecycle on a ProjectLayer task:
 
 - **Author a plan** — pull a task's description, draft a build plan from it, and write the
   plan back onto the task.
 - **Build from a plan** — take a task's plan and turn it into working code in this repo,
-  keeping the task status in sync.
+  then write test steps and hand the task over for testing.
+- **Fix a failed test** — pick up a task a tester failed, fix what they found, and send it
+  back for another round.
+- **Run the tests** — only when the user asks: work through the test steps yourself and
+  record the results.
 
 They chain naturally (author, then build) or run independently. Throughout, ProjectLayer
 holds the *what* and a rough *how*; the repository is the source of truth for *how it's
@@ -34,6 +40,9 @@ actually done here* — reconcile the two rather than following either blindly.
   **Build from a plan**.
 - "plan and build <task>" → do **Author** first, then **Build** using the plan you just
   wrote (you already have it in hand, so no need to re-fetch).
+- "fix the failed test on <task>", "what failed testing?", "pick up the failed tasks" →
+  **Fix a failed test**.
+- "run the tests for <task>", "test it yourself and sign it off" → **Run the tests**.
 
 ## Prerequisites
 
@@ -47,28 +56,42 @@ it reads from either of these (checked in this order):
 
 If neither is present the script explains how to supply one — surface that to the user
 rather than trying to guess a token. If you installed the plugin but were never prompted,
-re-enable it (`/plugin` → Installed → enable) to trigger the config prompt.
+re-enable it (`/plugin` → Installed → enable) to trigger the config prompt. Tokens are
+issued from **Settings → API Keys** in the ProjectLayer portal.
 
 The plugin targets the hosted ProjectLayer SaaS at `https://projectlayer.app` only; the API
 base URL is fixed and not configurable.
 
-The write operations (`set-plan`, `update-status`) require a token with the **write**
-scope. If one comes back `403 Forbidden`, the token is read-only — tell the user to issue a
-write-scoped token rather than retrying.
+The write operations require a token with the **write** scope. If one comes back
+`403 Forbidden` saying the key "lacks the 'write' scope", the token is read-only — tell the
+user to issue a write-scoped token rather than retrying.
+
+The API key acts as the ProjectLayer user who created it, so everything you write
+(statuses, test results, sign-offs) is recorded as that person.
 
 All API access goes through the bundled script so you don't re-derive auth and error
 handling each time. From the skill directory:
 
 ```bash
 python scripts/projectlayer.py list-projects
-python scripts/projectlayer.py list-tasks [--project N] [--has-plan] [--status STATUS]
+python scripts/projectlayer.py list-tasks [--project N] [--has-plan] [--status S[,S...]] \
+                                          [--test-outcome O] [--limit N]
 python scripts/projectlayer.py get-task <id-or-task-key>          # e.g. 42 or API-42
-python scripts/projectlayer.py update-status <id-or-task-key> <open|in_progress|done|closed>
-python scripts/projectlayer.py set-plan <id-or-task-key> --file plan.txt   # or pipe via stdin
+python scripts/projectlayer.py update-status <id-or-task-key> <status>
+python scripts/projectlayer.py set-plan <id-or-task-key> --file plan.md   # or pipe via stdin
+python scripts/projectlayer.py get-test-steps <id-or-task-key>
+python scripts/projectlayer.py set-test-steps <id-or-task-key> --file steps.json
+python scripts/projectlayer.py list-test-runs <id-or-task-key>
+python scripts/projectlayer.py get-test-run <id-or-task-key> [RUN_NUMBER|current]
+python scripts/projectlayer.py record-result <id-or-task-key> <result-id> <pass|fail|pending> [--note TEXT]
+python scripts/projectlayer.py sign-off <id-or-task-key>
 ```
 
-Each prints JSON. On error it prints a clear message to stderr and exits non-zero.
-`update-status` and `set-plan` are the write operations; the rest are read-only.
+Each prints JSON. On error it prints a clear message to stderr and exits non-zero; exit
+code **3** means the ProjectLayer server doesn't support test steps yet (see B5).
+`update-status`, `set-plan`, `set-test-steps`, `record-result` and `sign-off` are the write
+operations; the rest are read-only. The list commands fetch every page, so what they
+return is the complete list, not just the first page.
 
 ## Identify the task (both flows start here)
 
@@ -78,7 +101,8 @@ Map what the user said to a specific task id:
   `get-task API-42`.
 - **They named a project or were vague** ("plan the next open task", "start on the export
   work") → `list-projects` to find the project, then `list-tasks --project N` (add
-  `--has-plan` when building, since building needs a plan). Show the candidates and confirm
+  `--has-plan` when building, since building needs a plan, and `--status open,in_progress`
+  to leave out finished work). Show the candidates and confirm
   which one before doing real work — guessing wastes effort.
 
 ---
@@ -198,46 +222,148 @@ exist. For each step:
 If you have the test-driven-development or systematic-debugging skills available and the
 work fits them, use them — they compose naturally with plan-driven building.
 
-### B5. Mark done and report back
+### B5. Write test steps and hand over for testing
 
 Only after the plan is genuinely built **and verified** (tests pass, behavior observed —
-not just "the code looks right"), mark the task done:
+not just "the code looks right"), hand the task over for testing. Be honest about this
+gate: if you skipped steps, couldn't verify, or left follow-up work, the task isn't ready —
+leave it `in_progress`, tell the user what's outstanding, and let them decide.
 
-```bash
-python scripts/projectlayer.py update-status <id-or-key> done
+ProjectLayer tasks carry a **test script**: plain-language steps a non-technical person
+works through in the UI, marking each one Pass or Fail. Write one that checks the work
+from the user's point of view:
+
+```json
+[
+  {"instruction": "Go to Projects and open any project. Click the Export button at the top of the task list.",
+   "expected_result": "A file called tasks.csv downloads."},
+  {"instruction": "Open tasks.csv in Excel or Numbers.",
+   "expected_result": "There is one row per task, with the task key, title and status in the first three columns."}
+]
 ```
 
-Setting `done` stamps the task's completion time in ProjectLayer. Be honest about this
-gate: if you skipped steps, couldn't verify, or left follow-up work, the task isn't done —
-leave it `in_progress`, tell the user what's outstanding, and let them decide. Don't mark
-something done to tidy up the board when it isn't finished.
+Good steps:
+- **One action per step.** If a step says "and then", split it.
+- **Name the exact page, button or field**, using the words on screen.
+- **Describe what the tester should see**, specifically enough to tell pass from fail.
+- **No jargon** — no routes, endpoints, database terms or code names. Write for someone
+  who has never seen the codebase.
+- Cover what the task asked for, including the obvious edge case (empty list, wrong
+  input), but stay under a dozen or so steps. The API allows at most 50, and each field up
+  to 2000 characters.
 
-Then summarize concisely:
+Show the steps to the user before sending them, unless they've said to just do it. Then:
+
+```bash
+python scripts/projectlayer.py set-test-steps <id-or-key> --file /tmp/steps.json
+python scripts/projectlayer.py update-status <id-or-key> testing
+```
+
+`set-test-steps` replaces the whole script. Moving to `testing` starts a new round with
+every step pending, and notifies the assignee, reporter and watchers. Don't record results
+or sign off yourself — a person does that, unless the user explicitly asks you to (see
+**Run the tests**).
+
+- `set-test-steps` returns **409** while the task is already in Testing, because the
+  script is frozen under a tester. Tell the user rather than moving the task out of
+  Testing to force it.
+- **Exit code 3** means this ProjectLayer server doesn't support test steps yet. Fall back
+  to marking the task done instead: `update-status <id-or-key> done`.
+- Marking a task `done` returns **409** if it's blocked by open tasks; the message lists
+  them. Leave it where it is and tell the user which tasks are blocking it.
+
+### B6. Report back
+
+Summarize concisely:
 
 - What you built, mapped back to the plan's steps (which are done, which you skipped/changed
   and why).
 - What you verified and how (tests run, output observed).
-- The task's new status in ProjectLayer, and anything the plan implied that still needs a
-  human decision or follow-up.
+- The test steps you wrote, and the task's new status in ProjectLayer — plus anything the
+  plan implied that still needs a human decision or follow-up.
+
+---
+
+## Flow C — Fix a failed test
+
+When a tester fails a step, ProjectLayer closes that round as `failed`, moves the task back
+to `in_progress`, and posts a comment quoting the step and what the tester saw.
+
+### C1. Find the failure
+
+- Given a task → `list-test-runs <id-or-key>`; the newest round is first.
+- Otherwise → `list-tasks --status in_progress --test-outcome failed` (add `--project N` if
+  they named one) lists every task whose latest round failed. Confirm which to work on.
+
+Then `get-test-run <id-or-key> <run_number>` for the failed round. Its `results` show which
+step failed and the tester's `note`; steps after it may still be `pending`, because a round
+ends at the first fail.
+
+### C2. Fix it
+
+Re-read the task and plan, reproduce what the tester describes, and fix it — the
+Build-flow rules (B2, B4) apply. The tester's note says what they *saw*, not the cause;
+debug from there rather than patching the symptom.
+
+### C3. Send it back for testing
+
+If the fail showed the step itself was wrong or unclear (not the code), fix the step with
+`set-test-steps` — the task is out of Testing now, so the script can be edited. Earlier
+rounds keep their own copy, so history isn't affected. Then `update-status <id-or-key>
+testing` to start a new round, which re-runs the whole script. Report what failed, what you
+changed, and that it's back in testing.
+
+---
+
+## Flow D — Run the tests (only when asked)
+
+Only do this when the user explicitly asks you to run the tests or sign off. A result or
+sign-off you record is attributed to the API key's creator, not to a tester, so it
+shouldn't happen by default.
+
+1. `get-test-run <id-or-key> current` — the open round and its `results`, each with an
+   `id`. (404 means the task isn't in Testing.)
+2. Work through the steps in order, doing what each one says as closely as you can (run
+   the app, call the page, check the output). Record each with `record-result <id-or-key>
+   <result-id> pass`, or `fail --note "What happened instead"`. A fail ends the round and
+   moves the task back to `in_progress` — switch to **Fix a failed test**. If you can't
+   perform a step yourself (it needs a real device, a human judgment, an account you don't
+   have), stop and tell the user rather than guessing a result.
+3. When every step has passed, the result response says `all_passed: true`. Only `sign-off`
+   if the user asked you to; it closes the round and marks the task done (409 if it's
+   blocked by open tasks). Otherwise tell the user it's ready for them to sign off.
+
+Setting a result back to `pending` undoes a mis-recorded one within the open round.
 
 ## Notes
 
-- Task statuses (the exact strings the API expects) are `open`, `in_progress`, `done`,
-  `closed`. Use `--status` on `list-tasks` to filter (e.g. find what's still open with a
-  plan). An unknown status is rejected with a 400.
+- Task statuses (the exact strings the API expects) are `open`, `in_progress`, `on_hold`,
+  `testing`, `done`, `closed`. `on_hold` means the work is paused — don't start building it
+  without checking with the user. `testing` means it's with a tester. Use `--status` on
+  `list-tasks` to filter, with several comma-separated (`--status open,in_progress`).
+- `list-tasks --test-outcome` filters on the latest round's outcome (`in_progress`,
+  `passed`, `failed`, `abandoned`).
 - Write operations:
-  - `update-status` → `PATCH /api/v1/tasks/{id}/status`. Setting `done`/`closed` records a
-    completion time and notifies the assignee and reporter, so only use it when the state is
-    real — don't churn the activity log with speculative flips.
+  - `update-status` → `PATCH /api/v1/tasks/{id}/status`. Every change is logged and
+    notifies people, so only use it when the state is real — don't churn the activity log
+    with speculative flips. `testing` needs test steps (409 without them). `done`/`closed`
+    records a completion time, and returns 409 if the task has open blockers or is in
+    Testing (a task in Testing is finished by a sign-off, not a status change).
   - `set-plan` → `PATCH /api/v1/tasks/{id}` with `{"claude_plan": <markdown>}`, writing only
     the plan field. Storing a plan stamps `plan_updated_at`, flips `has_plan` to true, and
     clears any in-progress/errored planning state; sending an empty string would clear the
     plan, which is why `set-plan` refuses empty input. Requires the write scope.
-- Task keys can use **any prefix** — prefixes are defined per project by the user (`RSPH-14`,
-  `API-42`, `ACME-3`, …). Commands accept a numeric id or a key; the script matches the key
-  case-insensitively and, since the API has no by-key lookup, pages through the whole task
-  list to find it. So a valid key resolves regardless of prefix or how far back the task is.
-- `list-tasks` returns a page of tasks (newest first) and does **not** include the plan text —
-  only `get-task` does. So: list to find the id, then get to read the plan.
+  - `set-test-steps` → `PUT /api/v1/tasks/{id}/test-steps`; `record-result` →
+    `PATCH …/test-runs/current/results/{result-id}`; `sign-off` →
+    `POST …/test-runs/current/sign-off`.
+- Task keys can use **any prefix** — there's no default; the user chooses each project's
+  prefix when creating it, so keys look like `API-42` or `ACME-3` but could be anything.
+  Never assume a prefix — use the key the user gave, or look it up. Commands accept a numeric id or a key; the script matches the key
+  case-insensitively and, since the API has no by-key lookup, finds the project with that
+  prefix and pages through its tasks (or through every task, if no active project has the
+  prefix). So a valid key resolves regardless of prefix or how far back the task is.
+- `list-tasks` returns every matching task and does **not** include the plan text — only
+  `get-task` does. So: list to find the id, then get to read the plan. Order: most recently
+  updated first; by task number with `--project`; by latest plan with `--has-plan`.
 - Keep the API interaction to the bundled script. If you hit an endpoint the script doesn't
   cover, prefer extending the script over ad-hoc `curl`, so error handling stays consistent.
