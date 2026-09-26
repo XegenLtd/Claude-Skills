@@ -44,11 +44,12 @@ From the **Marketplaces** tab you can also update or remove the marketplace late
 ### `projectlayer-build`
 
 Authors development plans from a [ProjectLayer.app](https://projectlayer.app) task's
-description and builds the code from a plan, keeping the task's status in sync via the
-ProjectLayer REST API.
+description, builds the code from a plan, then writes plain-language test steps and hands
+the task over for testing — keeping the task's status in sync via the ProjectLayer REST
+API. It also picks up tasks that failed testing, fixes them and sends them back.
 
 **Setup:** you need a **write-scoped** API token from your
-[projectlayer.app](https://projectlayer.app) account (Settings → API).
+[projectlayer.app](https://projectlayer.app) account (Settings → API Keys).
 
 When you install the plugin, Claude Code **prompts you for the token** and stores it
 securely in your OS keychain — nothing to configure by hand. (Not prompted? Re-enable the
@@ -62,7 +63,9 @@ export PROJECTLAYER_API_TOKEN=pl_live_xxx
 ```
 
 Requires Python 3 (standard library only). The skill is model-invoked — just ask, e.g.
-*"Write a plan for RSPH-23 and push it back"* or *"Build RSPH-14"*.
+*"Write a plan for API-42 and push it back"*, *"Build API-42"* or
+*"Fix whatever failed testing on API-42"* — using your own task keys. Each project's key
+prefix is whatever you chose when creating the project.
 
 ---
 
