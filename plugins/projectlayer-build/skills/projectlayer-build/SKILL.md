@@ -11,7 +11,11 @@ description: >-
   drafts a plan and writes it back to the task, builds the code locally, writes
   plain-language test steps and hands the task over for testing, fixes tasks that
   failed testing, and keeps the task's status in sync (in_progress while building,
-  testing once built and verified).
+  testing once built and verified). It also raises new tickets (tasks) in a project, and
+  triages the project's Intake queue — including errors that arrive from Sentry — by
+  reading pending items, then accepting, rejecting or converting them into tasks for
+  action (e.g. "raise a ticket for this bug", "what's in the intake?", "triage the Sentry
+  errors", "turn the intake bugs into tickets").
 compatibility: Requires the PROJECTLAYER_API_TOKEN environment variable and network access to projectlayer.app.
 ---
 
@@ -27,6 +31,10 @@ This skill covers the full plan lifecycle on a ProjectLayer task:
   back for another round.
 - **Run the tests** — only when the user asks: work through the test steps yourself and
   record the results.
+- **Raise a ticket** — create a new task in a project from what the user (or this session)
+  has found.
+- **Triage Intake** — read the project's Intake queue (including Sentry errors), then
+  accept, reject or convert each item into a task for action.
 
 They chain naturally (author, then build) or run independently. Throughout, ProjectLayer
 holds the *what* and a rough *how*; the repository is the source of truth for *how it's
@@ -43,6 +51,11 @@ actually done here* — reconcile the two rather than following either blindly.
 - "fix the failed test on <task>", "what failed testing?", "pick up the failed tasks" →
   **Fix a failed test**.
 - "run the tests for <task>", "test it yourself and sign it off" → **Run the tests**.
+- "raise/create/log a ticket for ...", "add a task for this bug", "open a ticket for what we
+  just found" → **Raise a ticket**.
+- "what's in the intake?", "triage the intake", "look at the Sentry errors", "turn the
+  intake bugs into tickets", "process the backlog items" → **Triage Intake**. Afterwards
+  they may want to go straight on to **Author a plan** / **Build** for a converted bug.
 
 ## Prerequisites
 
@@ -85,12 +98,22 @@ python scripts/projectlayer.py list-test-runs <id-or-task-key>
 python scripts/projectlayer.py get-test-run <id-or-task-key> [RUN_NUMBER|current]
 python scripts/projectlayer.py record-result <id-or-task-key> <result-id> <pass|fail|pending> [--note TEXT]
 python scripts/projectlayer.py sign-off <id-or-task-key>
+python scripts/projectlayer.py create-task --project N --title TEXT [--description-file PATH] \
+                                           [--priority P] [--type T] [--assignee N] \
+                                           [--milestone N] [--plan-file PATH]
+python scripts/projectlayer.py list-intake [--project N] [--status S[,S...]] [--limit N]
+python scripts/projectlayer.py get-intake <intake-id>
+python scripts/projectlayer.py accept-intake <intake-id>
+python scripts/projectlayer.py reject-intake <intake-id>
+python scripts/projectlayer.py convert-intake <intake-id> [--title TEXT] [--description-file PATH] \
+                                              [--priority P] [--type T] [--assignee N] [--milestone N]
 ```
 
 Each prints JSON. On error it prints a clear message to stderr and exits non-zero; exit
-code **3** means the ProjectLayer server doesn't support test steps yet (see B5).
-`update-status`, `set-plan`, `set-test-steps`, `record-result` and `sign-off` are the write
-operations; the rest are read-only. The list commands fetch every page, so what they
+code **3** means the ProjectLayer server doesn't support the feature yet (test steps — see
+B5 — or processing Intake items — see Flow F). `update-status`, `set-plan`,
+`set-test-steps`, `record-result`, `sign-off`, `create-task`, `accept-intake`,
+`reject-intake` and `convert-intake` are the write operations; the rest are read-only. The list commands fetch every page, so what they
 return is the complete list, not just the first page.
 
 ## Identify the task (both flows start here)
@@ -353,6 +376,15 @@ Setting a result back to `pending` undoes a mis-recorded one within the open rou
     the plan field. Storing a plan stamps `plan_updated_at`, flips `has_plan` to true, and
     clears any in-progress/errored planning state; sending an empty string would clear the
     plan, which is why `set-plan` refuses empty input. Requires the write scope.
+  - `create-task` → `POST /api/v1/tasks`. Creates a task reported by the API key's user;
+    `project_id` and `title` are required. `description` is HTML and `claude_plan` is
+    Markdown.
+  - `accept-intake` / `reject-intake` → `POST /api/v1/backlog/{id}/accept|reject`, only
+    for a `pending` item (409 otherwise). `convert-intake` → `POST
+    /api/v1/backlog/{id}/convert` for a `pending` or `accepted` item, with optional
+    `title`, `description`, `priority`, `type`, `assignee_id` and `milestone_id`
+    overrides; returns the intake item plus the new `task`. All three need the key
+    owner's `backlog.manage` permission as well as the write scope.
   - `set-test-steps` → `PUT /api/v1/tasks/{id}/test-steps`; `record-result` →
     `PATCH …/test-runs/current/results/{result-id}`; `sign-off` →
     `POST …/test-runs/current/sign-off`.

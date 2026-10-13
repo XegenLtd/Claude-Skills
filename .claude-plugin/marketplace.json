@@ -9,8 +9,8 @@
     {
       "name": "projectlayer-build",
       "source": "./plugins/projectlayer-build",
-      "description": "Author development plans from ProjectLayer.app tasks and build the code from them, write test steps for handover, and keep task status in sync via the ProjectLayer REST API.",
-      "version": "1.3.0",
+      "description": "Author development plans from ProjectLayer.app tasks and build the code from them, write test steps for handover, raise new tickets, triage the Intake queue (including Sentry errors) into tasks, and keep task status in sync via the ProjectLayer REST API.",
+      "version": "1.4.0",
       "author": {
         "name": "Xegen"
       },

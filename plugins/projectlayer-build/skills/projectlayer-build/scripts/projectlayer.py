@@ -25,13 +25,24 @@ Usage:
   python projectlayer.py get-test-run <id-or-task-key> [RUN_NUMBER|current]
   python projectlayer.py record-result <id-or-task-key> <result-id> <pass|fail|pending> [--note TEXT]
   python projectlayer.py sign-off <id-or-task-key>
+  python projectlayer.py create-task --project N --title TEXT [--description-file PATH]
+                                     [--priority P] [--type T] [--assignee N]
+                                     [--milestone N] [--plan-file PATH]
+  python projectlayer.py list-intake [--project N] [--status S[,S...]] [--limit N]
+  python projectlayer.py get-intake <intake-id>
+  python projectlayer.py accept-intake <intake-id>
+  python projectlayer.py reject-intake <intake-id>
+  python projectlayer.py convert-intake <intake-id> [--title TEXT] [--description-file PATH]
+                                        [--priority P] [--type T] [--assignee N] [--milestone N]
 
 All commands print JSON to stdout on success. On failure they print a human-readable
 error to stderr and exit non-zero, so the caller can react rather than guess. Exit
-code 3 means the ProjectLayer server doesn't support test steps yet.
+code 3 means the ProjectLayer server doesn't support the feature yet (test steps, or
+accepting/rejecting/converting Intake items).
 
-Write operations: update-status, set-plan, set-test-steps, record-result and
-sign-off. Everything else is read-only.
+Write operations: update-status, set-plan, set-test-steps, record-result, sign-off,
+create-task, accept-intake, reject-intake and convert-intake. Everything else is
+read-only.
 """
 
 import argparse
@@ -56,6 +67,9 @@ MAX_PAGES = 1000
 VALID_STATUSES = ("open", "in_progress", "on_hold", "testing", "done", "closed")
 VALID_TEST_OUTCOMES = ("in_progress", "passed", "failed", "abandoned")
 VALID_RESULTS = ("pass", "fail", "pending")
+VALID_PRIORITIES = ("low", "medium", "high", "critical")
+VALID_TYPES = ("feature", "bug", "task", "investigation", "idea")
+VALID_INTAKE_STATUSES = ("pending", "accepted", "rejected", "converted")
 
 # Limits the API enforces on a test script; checked here too so the user gets a crisp
 # message instead of a raw 422.
@@ -472,6 +486,141 @@ def cmd_sign_off(args):
     _print(_test_call(task_id, "POST", f"/tasks/{task_id}/test-runs/current/sign-off"))
 
 
+def _choice(value: str | None, allowed: tuple, what: str) -> str | None:
+    if value is None:
+        return None
+    v = value.lower()
+    if v not in allowed:
+        _fail(f"'{value}' is not a valid {what}. Use one of: {', '.join(allowed)}.")
+    return v
+
+
+def cmd_create_task(args):
+    title = (args.title or "").strip()
+    if not title:
+        _fail("A non-empty --title is required.")
+    if len(title) > 500:
+        _fail("The title is too long; keep it to 500 characters.")
+
+    body = {"project_id": args.project, "title": title}
+    if args.description_file:
+        description = _read_input(args.description_file, "description").strip()
+        if description:
+            body["description"] = description
+    if args.plan_file:
+        plan = _read_input(args.plan_file, "plan").strip()
+        if plan:
+            body["claude_plan"] = plan
+    priority = _choice(args.priority, VALID_PRIORITIES, "priority")
+    task_type = _choice(args.type, VALID_TYPES, "type")
+    if priority:
+        body["priority"] = priority
+    if task_type:
+        body["type"] = task_type
+    if args.assignee:
+        body["assignee_id"] = args.assignee
+    if args.milestone:
+        body["milestone_id"] = args.milestone
+
+    # Creates a new task (a "ticket"). Reported by the API key's user.
+    _print(_call("POST", "/tasks", body=body))
+
+
+def cmd_list_intake(args):
+    statuses = None
+    if args.status:
+        statuses = [s.strip().lower() for s in args.status.split(",") if s.strip()]
+        bad = [s for s in statuses if s not in VALID_INTAKE_STATUSES]
+        if bad:
+            _fail(f"'{', '.join(bad)}' is not a valid Intake status. "
+                  f"Use one or more of: {', '.join(VALID_INTAKE_STATUSES)}.")
+
+    params = {
+        "project_id": args.project,
+        # Only a single status is sent to the server; the filter is re-applied below so
+        # several comma-separated statuses work too.
+        "status": statuses[0] if statuses and len(statuses) == 1 else None,
+    }
+    items = []
+    for item in _iter_pages("/backlog", params):
+        if statuses and item.get("status") not in statuses:
+            continue
+        items.append(item)
+        if args.limit and len(items) >= args.limit:
+            break
+    # List rows omit the description; use get-intake for the full text.
+    _print({"data": items, "meta": {"total": len(items)}})
+
+
+def _intake_call(intake_id: str, method: str, path: str, body=None):
+    """Call an Intake endpoint. A 404 is ambiguous — the item may not exist, or the
+    server may predate Intake processing — so on 404 fetch the item: if it exists but
+    has no `description` field, the accept/reject/convert endpoints aren't deployed."""
+    try:
+        return _request(method, path, body=body)
+    except ApiError as e:
+        if e.status == 404 and method != "GET":
+            try:
+                item = _request("GET", f"/backlog/{intake_id}")
+            except ApiError:
+                item = None
+            if isinstance(item, dict) and "description" not in item:
+                _fail(
+                    "This ProjectLayer server doesn't support processing Intake items "
+                    "through the API yet. Accept, reject or convert the item in the "
+                    "portal instead.",
+                    code=EXIT_UNSUPPORTED,
+                )
+        _explain(e)
+
+
+def _intake_id(value: str) -> str:
+    if not value.isdigit():
+        _fail(f"'{value}' is not an Intake item id. Use the numeric id from list-intake.")
+    return value
+
+
+def cmd_get_intake(args):
+    intake_id = _intake_id(args.identifier)
+    _print(_intake_call(intake_id, "GET", f"/backlog/{intake_id}"))
+
+
+def cmd_accept_intake(args):
+    intake_id = _intake_id(args.identifier)
+    _print(_intake_call(intake_id, "POST", f"/backlog/{intake_id}/accept"))
+
+
+def cmd_reject_intake(args):
+    intake_id = _intake_id(args.identifier)
+    _print(_intake_call(intake_id, "POST", f"/backlog/{intake_id}/reject"))
+
+
+def cmd_convert_intake(args):
+    intake_id = _intake_id(args.identifier)
+    body = {}
+    if args.title is not None:
+        title = args.title.strip()
+        if not title:
+            _fail("--title cannot be empty.")
+        body["title"] = title
+    if args.description_file:
+        body["description"] = _read_input(args.description_file, "description").strip()
+    priority = _choice(args.priority, VALID_PRIORITIES, "priority")
+    task_type = _choice(args.type, VALID_TYPES, "type")
+    if priority:
+        body["priority"] = priority
+    if task_type:
+        body["type"] = task_type
+    if args.assignee:
+        body["assignee_id"] = args.assignee
+    if args.milestone:
+        body["milestone_id"] = args.milestone
+
+    # Creates the task and marks the item converted in one call; converting an item that
+    # was already converted returns 409 with its existing task, so a retry is safe.
+    _print(_intake_call(intake_id, "POST", f"/backlog/{intake_id}/convert", body=body))
+
+
 def main():
     parser = argparse.ArgumentParser(description="ProjectLayer API client for the projectlayer-build skill.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -536,6 +685,45 @@ def main():
     so = sub.add_parser("sign-off", help="Sign off a fully passed round and mark the task done")
     so.add_argument("identifier", help="Numeric task id (42) or task key (API-42)")
     so.set_defaults(func=cmd_sign_off)
+
+    ct = sub.add_parser("create-task", help="Raise a new task (ticket) in a project")
+    ct.add_argument("--project", type=int, required=True, help="Project id (see list-projects)")
+    ct.add_argument("--title", required=True, help="Task title (max 500 characters)")
+    ct.add_argument("--description-file", help="File with the description (HTML); '-' for stdin")
+    ct.add_argument("--plan-file", help="File with a build plan (Markdown) to store on the task")
+    ct.add_argument("--priority", help=", ".join(VALID_PRIORITIES))
+    ct.add_argument("--type", help=", ".join(VALID_TYPES))
+    ct.add_argument("--assignee", type=int, help="User id of an active member")
+    ct.add_argument("--milestone", type=int, help="Milestone id in the same project")
+    ct.set_defaults(func=cmd_create_task)
+
+    li = sub.add_parser("list-intake", help="List Intake items (optionally filtered), across all pages")
+    li.add_argument("--project", type=int, help="Filter by project_id")
+    li.add_argument("--status", help=f"One or more comma-separated statuses ({', '.join(VALID_INTAKE_STATUSES)})")
+    li.add_argument("--limit", type=int, help="Stop after this many matching items")
+    li.set_defaults(func=cmd_list_intake)
+
+    gi = sub.add_parser("get-intake", help="Get one Intake item, including its description")
+    gi.add_argument("identifier", help="Numeric Intake item id")
+    gi.set_defaults(func=cmd_get_intake)
+
+    ai = sub.add_parser("accept-intake", help="Accept a pending Intake item")
+    ai.add_argument("identifier", help="Numeric Intake item id")
+    ai.set_defaults(func=cmd_accept_intake)
+
+    ri = sub.add_parser("reject-intake", help="Reject a pending Intake item")
+    ri.add_argument("identifier", help="Numeric Intake item id")
+    ri.set_defaults(func=cmd_reject_intake)
+
+    ci = sub.add_parser("convert-intake", help="Convert an Intake item into a task")
+    ci.add_argument("identifier", help="Numeric Intake item id")
+    ci.add_argument("--title", help="Replace the title")
+    ci.add_argument("--description-file", help="File with a replacement description (HTML); '-' for stdin")
+    ci.add_argument("--priority", help=", ".join(VALID_PRIORITIES))
+    ci.add_argument("--type", help=f"{', '.join(VALID_TYPES)} (default: bug for Sentry items, else task)")
+    ci.add_argument("--assignee", type=int, help="User id of an active member")
+    ci.add_argument("--milestone", type=int, help="Milestone id in the item's project")
+    ci.set_defaults(func=cmd_convert_intake)
 
     args = parser.parse_args()
     args.func(args)

@@ -48,6 +48,11 @@ description, builds the code from a plan, then writes plain-language test steps 
 the task over for testing — keeping the task's status in sync via the ProjectLayer REST
 API. It also picks up tasks that failed testing, fixes them and sends them back.
 
+It can **raise new tickets** (tasks) in a project, and **triage the project's Intake queue**
+— including errors reported by Sentry — by reading pending items and accepting, rejecting
+or converting them into tasks for action. Processing Intake needs a token whose user has
+the `backlog.manage` permission.
+
 **Setup:** you need a **write-scoped** API token from your
 [projectlayer.app](https://projectlayer.app) account (Settings → API Keys).
 
