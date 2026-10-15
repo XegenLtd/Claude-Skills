@@ -69,7 +69,7 @@ VALID_TEST_OUTCOMES = ("in_progress", "passed", "failed", "abandoned")
 VALID_RESULTS = ("pass", "fail", "pending")
 VALID_PRIORITIES = ("low", "medium", "high", "critical")
 VALID_TYPES = ("feature", "bug", "task", "investigation", "idea")
-VALID_INTAKE_STATUSES = ("pending", "accepted", "rejected", "converted")
+VALID_INTAKE_STATUSES = ("pending", "accepted", "rejected", "converted", "resolved")
 
 # Limits the API enforces on a test script; checked here too so the user gets a crisp
 # message instead of a raw 422.

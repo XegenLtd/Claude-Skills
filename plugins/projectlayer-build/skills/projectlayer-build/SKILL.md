@@ -358,6 +358,138 @@ shouldn't happen by default.
 
 Setting a result back to `pending` undoes a mis-recorded one within the open round.
 
+## Flow E — Raise a ticket
+
+Use this to create a new task: a bug found while working, a follow-up, or work the user
+describes. It only creates the task — don't plan or build it unless asked (that's Flow A/B).
+
+### E1. Pick the project
+
+If the user didn't say which project, `list-projects` and confirm. The task's key prefix
+comes from the project, so the right project matters.
+
+### E2. Check it isn't already there
+
+`list-tasks --project N --status open,in_progress,on_hold,testing` and scan titles for the
+same problem. If one matches, tell the user and offer to add to it (or skip) rather than
+raising a duplicate.
+
+### E3. Write the ticket
+
+- **Title** — short and specific, in the imperative or as the symptom ("Export button
+  downloads an empty file"), under 500 characters.
+- **Description** — **HTML** (`<p>`, `<ul>`, `<ol>`, `<strong>`, `<code>`; no scripts, the
+  server sanitizes it). Say what's wrong or wanted, where, how to reproduce or what done
+  looks like, and anything already ruled out. Take it from the conversation and code —
+  never invent causes.
+- **Type** (`feature`, `bug`, `task`, `investigation`, `idea`) and **priority** (`low`,
+  `medium`, `high`, `critical`). Default `task` / `medium`; only go above `high` if the user
+  says so.
+- Don't set an assignee or milestone unless the user named one.
+
+Show the draft and confirm before creating, unless they've said to just do it. Then:
+
+```bash
+python scripts/projectlayer.py create-task --project N --title "..." \
+    --description-file /tmp/ticket.html --type bug --priority high
+```
+
+The response is the new task; report its `task_key`. If the user wants it planned or built
+next, carry on with Flow A or B using that task.
+
+---
+
+## Flow F — Triage Intake
+
+The project's **Intake** queue holds items waiting for a decision: tickets pushed from
+SupportLayer, errors Sentry reported, and anything created through the API. Triage reads
+each pending item and decides what happens to it. Each change is recorded and may notify
+people, so confirm the plan with the user before acting on it.
+
+The API key's user needs the `backlog.manage` permission to accept, reject or convert (a
+`403` mentioning it means they don't — tell the user rather than retrying). Exit code **3**
+means this server can't process Intake through the API yet; fall back to the portal.
+
+### F1. Find what's waiting
+
+```bash
+python scripts/projectlayer.py list-intake --status pending [--project N]
+```
+
+List rows carry the title, priority, source (`source_service` is `sentry` for Sentry
+errors) and `source_ticket_url`, but not the description. Statuses are `pending`,
+`accepted`, `rejected`, `converted` and `resolved` — **resolved** means the source system
+(Sentry) resolved the issue before anyone triaged it, so it needs no action and can't be
+accepted, rejected or converted (409). If it regresses in Sentry it comes back as
+`pending` by itself. If there are many pending items, summarise by project and source
+first and ask where to start.
+
+### F2. Read each item
+
+`get-intake <id>` returns the full `description`. For a **Sentry** item it's plain text
+with the issue short id, level, culprit (the code location), event count, first/last seen
+and the Sentry link; a "Regressed in Sentry" note means it was resolved before and came
+back. The link needs a Sentry login, so don't try to fetch it; work from what's in the
+item and, if it names a code location, from the repository.
+
+Then check for overlap before deciding:
+
+- `list-tasks --project N --status open,in_progress,on_hold,testing` — is there already a
+  task for this?
+- The other pending items — the same culprit often appears as several issues.
+
+### F3. Decide, then show a short plan
+
+For every item choose one outcome and a one-line reason:
+
+| Outcome | When | Command |
+|---|---|---|
+| **Convert** | A real problem someone should act on | `convert-intake` |
+| **Reject** | Noise, a duplicate of an existing task or item, already fixed, or not actionable | `reject-intake` |
+| **Accept** | Valid, but not being scheduled yet | `accept-intake` |
+| **Leave pending** | Needs information you don't have — say what | (nothing) |
+
+Don't convert on the strength of a title alone: read the description, and look at the code
+where it names one, so the ticket you write is accurate. Show the user the whole plan as a
+table (item, outcome, reason, and for conversions the title/type/priority you'll set) and
+get a go-ahead, unless they've said to just process them.
+
+### F4. Convert well
+
+A converted item becomes a task, so write the task the way Flow E would. The raw Sentry
+title is the exception message plus a `[Sentry]` prefix and is often unclear; override it:
+
+```bash
+python scripts/projectlayer.py convert-intake <id> \
+    --title "Checkout fails with TypeError when the basket is empty" \
+    --description-file /tmp/ticket.html --type bug --priority high
+```
+
+- Sentry items default to type `bug`; set `--type` for anything else.
+- Map priority from impact, not just Sentry's level: `fatal` and high-volume errors on a
+  core path are `critical`/`high`; rare, low-impact ones are `medium`/`low`.
+- A `--description-file` replaces the item's text, which would drop the Sentry details.
+  Include the level, culprit, event count and Sentry link in your HTML — or omit it to keep
+  the item's text (a link back to the source is always appended).
+- Don't pass `--assignee` or `--milestone` unless the user named them.
+
+The response contains the new `task` (with its `task_key`). Converting an already
+converted item returns `409` with the existing task, so a retry is safe.
+
+### F5. Report back
+
+List what you did per item: the new task keys for conversions, the reason for each
+rejection (and which task a duplicate points at), and what's left pending and why. Offer to
+carry straight on into **Flow A** (plan) and **Flow B** (build) for the bugs you converted.
+
+**Heads-up when finishing the work:** if a project has a Sentry token configured,
+ProjectLayer resolves the Sentry issue itself when a converted Sentry task is marked
+`done` or `closed` (by `update-status`, a sign-off, or the portal). So only mark such a
+task done once the fix is verified. Conversely, when Sentry resolves an issue, the task is
+left open and gets a comment; don't treat that as a reason to close it.
+
+---
+
 ## Notes
 
 - Task statuses (the exact strings the API expects) are `open`, `in_progress`, `on_hold`,
