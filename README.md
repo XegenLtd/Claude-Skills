@@ -53,6 +53,9 @@ It can **raise new tickets** (tasks) in a project, and **triage the project's In
 or converting them into tasks for action. Processing Intake needs a token whose user has
 the `backlog.manage` permission.
 
+It also understands **epics and user stories**: it can create epics, file stories and bugs under
+them (from scratch or when converting Intake items), list an epic's work and show its progress.
+
 **Setup:** you need a **write-scoped** API token from your
 [projectlayer.app](https://projectlayer.app) account (Settings → API Keys).
 

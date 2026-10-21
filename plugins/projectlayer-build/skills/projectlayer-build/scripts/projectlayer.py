@@ -15,7 +15,9 @@ Base:  the live ProjectLayer SaaS at https://projectlayer.app/api/v1 (fixed).
 Usage:
   python projectlayer.py list-projects
   python projectlayer.py list-tasks [--project N] [--has-plan] [--status S[,S...]]
-                                    [--test-outcome O] [--limit N]
+                                    [--test-outcome O] [--type T[,T...]] [--epic ID|KEY|none]
+                                    [--limit N]
+  python projectlayer.py list-epics [--project N] [--include-finished]
   python projectlayer.py get-task <id-or-task-key>
   python projectlayer.py update-status <id-or-task-key> <status>
   python projectlayer.py set-plan <id-or-task-key> [--file PATH]   # PATH or - for stdin
@@ -28,12 +30,14 @@ Usage:
   python projectlayer.py create-task --project N --title TEXT [--description-file PATH]
                                      [--priority P] [--type T] [--assignee N]
                                      [--milestone N] [--plan-file PATH]
+                                     [--epic ID|KEY] [--story-points N]
   python projectlayer.py list-intake [--project N] [--status S[,S...]] [--limit N]
   python projectlayer.py get-intake <intake-id>
   python projectlayer.py accept-intake <intake-id>
   python projectlayer.py reject-intake <intake-id>
   python projectlayer.py convert-intake <intake-id> [--title TEXT] [--description-file PATH]
                                         [--priority P] [--type T] [--assignee N] [--milestone N]
+                                        [--epic ID|KEY] [--story-points N]
 
 All commands print JSON to stdout on success. On failure they print a human-readable
 error to stderr and exit non-zero, so the caller can react rather than guess. Exit
@@ -68,7 +72,7 @@ VALID_STATUSES = ("open", "in_progress", "on_hold", "testing", "done", "closed")
 VALID_TEST_OUTCOMES = ("in_progress", "passed", "failed", "abandoned")
 VALID_RESULTS = ("pass", "fail", "pending")
 VALID_PRIORITIES = ("low", "medium", "high", "critical")
-VALID_TYPES = ("feature", "bug", "task", "investigation", "idea")
+VALID_TYPES = ("epic", "user_story", "feature", "bug", "task", "investigation", "idea")
 VALID_INTAKE_STATUSES = ("pending", "accepted", "rejected", "converted", "resolved")
 
 # Limits the API enforces on a test script; checked here too so the user gets a crisp
@@ -266,8 +270,20 @@ def cmd_list_tasks(args):
         _fail(f"'{args.test_outcome}' is not a valid test outcome. "
               f"Use one of: {', '.join(VALID_TEST_OUTCOMES)}.")
 
+    types = None
+    if args.type:
+        types = [t.strip().lower() for t in args.type.split(",") if t.strip()]
+        bad = [t for t in types if t not in VALID_TYPES]
+        if bad:
+            _fail(f"'{', '.join(bad)}' is not a valid type. Use one or more of: {', '.join(VALID_TYPES)}.")
+    epic_param = None
+    if args.epic:
+        epic_param = "0" if args.epic.lower() == "none" else _resolve_task_id(args.epic)
+
     params = {
         "project_id": args.project,
+        "type": ",".join(types) if types else None,
+        "epic_id": epic_param,
         # The API expects the literal string "true" for the boolean filter.
         "has_plan": "true" if args.has_plan else None,
         # Only a single status is sent to the server: not every API version accepts a
@@ -282,10 +298,37 @@ def cmd_list_tasks(args):
             continue
         if outcome and t.get("last_test_outcome") != outcome:
             continue
+        # An older server ignores the type/epic filters rather than rejecting them, so
+        # apply them here too — and refuse to guess about epics it doesn't know about.
+        if types and t.get("type") not in types:
+            continue
+        if epic_param is not None:
+            if "epic" not in t:
+                _fail("This ProjectLayer server doesn't support epics yet.", code=EXIT_UNSUPPORTED)
         tasks.append(t)
         if args.limit and len(tasks) >= args.limit:
             break
     _print({"data": tasks, "meta": {"total": len(tasks)}})
+
+
+def cmd_list_epics(args):
+    """Epics with their progress. The list endpoint has no rollup, so each epic's detail
+    is fetched for `epic_progress` — there are normally only a handful."""
+    epics = []
+    for t in _iter_pages("/tasks", {"project_id": args.project, "type": "epic"}):
+        if t.get("type") != "epic":
+            continue
+        if not args.include_finished and t.get("status") in ("done", "closed"):
+            continue
+        detail = _get(f"/tasks/{t['id']}")
+        if isinstance(detail, dict) and "epic_progress" not in detail:
+            _fail("This ProjectLayer server doesn't support epics yet.", code=EXIT_UNSUPPORTED)
+        epics.append({
+            "id": t["id"], "task_key": t.get("task_key"), "title": t.get("title"),
+            "project_id": t.get("project_id"), "status": t.get("status"),
+            "epic_progress": (detail or {}).get("epic_progress"),
+        })
+    _print({"data": epics, "meta": {"total": len(epics)}})
 
 
 def _resolve_task_id(ident: str) -> str:
@@ -495,6 +538,23 @@ def _choice(value: str | None, allowed: tuple, what: str) -> str | None:
     return v
 
 
+def _points(value: int) -> int:
+    if value < 0 or value > 10000:
+        _fail("--story-points must be between 0 and 10000.")
+    return value
+
+
+def _check_epic_applied(result, wanted) -> None:
+    """A server without epics ignores `epic_id`; its responses then have no `epic` key, so
+    a request that asked for an epic must not look like it worked."""
+    if wanted and isinstance(result, dict) and "epic" not in result:
+        _fail(
+            "This ProjectLayer server doesn't support epics yet, so the epic was not set. "
+            "The task itself was created.",
+            code=EXIT_UNSUPPORTED,
+        )
+
+
 def cmd_create_task(args):
     title = (args.title or "").strip()
     if not title:
@@ -521,9 +581,15 @@ def cmd_create_task(args):
         body["assignee_id"] = args.assignee
     if args.milestone:
         body["milestone_id"] = args.milestone
+    if args.story_points is not None:
+        body["story_points"] = _points(args.story_points)
+    if args.epic:
+        body["epic_id"] = int(_resolve_task_id(args.epic))
 
     # Creates a new task (a "ticket"). Reported by the API key's user.
-    _print(_call("POST", "/tasks", body=body))
+    result = _call("POST", "/tasks", body=body)
+    _check_epic_applied(result, args.epic)
+    _print(result)
 
 
 def cmd_list_intake(args):
@@ -615,10 +681,18 @@ def cmd_convert_intake(args):
         body["assignee_id"] = args.assignee
     if args.milestone:
         body["milestone_id"] = args.milestone
+    if args.story_points is not None:
+        body["story_points"] = _points(args.story_points)
+    if args.epic:
+        body["epic_id"] = int(_resolve_task_id(args.epic))
 
     # Creates the task and marks the item converted in one call; converting an item that
     # was already converted returns 409 with its existing task, so a retry is safe.
-    _print(_intake_call(intake_id, "POST", f"/backlog/{intake_id}/convert", body=body))
+    result = _intake_call(intake_id, "POST", f"/backlog/{intake_id}/convert", body=body)
+    if args.epic and isinstance(result, dict) and isinstance(result.get("task"), dict):
+        # The convert response doesn't carry the epic, so confirm it on the new task.
+        _check_epic_applied(_get(f"/tasks/{result['task']['id']}"), args.epic)
+    _print(result)
 
 
 def main():
@@ -635,7 +709,14 @@ def main():
     lt.add_argument("--status", help=f"One or more comma-separated statuses ({', '.join(VALID_STATUSES)})")
     lt.add_argument("--test-outcome", help=f"Outcome of the latest test round ({', '.join(VALID_TEST_OUTCOMES)})")
     lt.add_argument("--limit", type=int, help="Stop after this many matching tasks")
+    lt.add_argument("--type", help=f"One or more comma-separated types ({', '.join(VALID_TYPES)})")
+    lt.add_argument("--epic", help="Only items in this epic (id or task key), or 'none' for items in no epic")
     lt.set_defaults(func=cmd_list_tasks)
+
+    le = sub.add_parser("list-epics", help="List epics with their progress (items and points done/total)")
+    le.add_argument("--project", type=int, help="Filter by project_id")
+    le.add_argument("--include-finished", action="store_true", help="Also list Done/Closed epics")
+    le.set_defaults(func=cmd_list_epics)
 
     gt = sub.add_parser("get-task", help="Get one task (incl. claude_plan) by id or key")
     gt.add_argument("identifier", help="Numeric task id (42) or task key (API-42)")
@@ -695,6 +776,8 @@ def main():
     ct.add_argument("--type", help=", ".join(VALID_TYPES))
     ct.add_argument("--assignee", type=int, help="User id of an active member")
     ct.add_argument("--milestone", type=int, help="Milestone id in the same project")
+    ct.add_argument("--epic", help="File the task under this epic (id or task key). Not for epics or subtasks")
+    ct.add_argument("--story-points", type=int, help="Story points, 0-10000")
     ct.set_defaults(func=cmd_create_task)
 
     li = sub.add_parser("list-intake", help="List Intake items (optionally filtered), across all pages")
@@ -723,6 +806,8 @@ def main():
     ci.add_argument("--type", help=f"{', '.join(VALID_TYPES)} (default: bug for Sentry items, else task)")
     ci.add_argument("--assignee", type=int, help="User id of an active member")
     ci.add_argument("--milestone", type=int, help="Milestone id in the item's project")
+    ci.add_argument("--epic", help="File the new task under this epic (id or task key)")
+    ci.add_argument("--story-points", type=int, help="Story points, 0-10000")
     ci.set_defaults(func=cmd_convert_intake)
 
     args = parser.parse_args()

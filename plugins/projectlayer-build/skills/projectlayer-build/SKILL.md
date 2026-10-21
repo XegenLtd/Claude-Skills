@@ -15,7 +15,10 @@ description: >-
   triages the project's Intake queue — including errors that arrive from Sentry — by
   reading pending items, then accepting, rejecting or converting them into tasks for
   action (e.g. "raise a ticket for this bug", "what's in the intake?", "triage the Sentry
-  errors", "turn the intake bugs into tickets").
+  errors", "turn the intake bugs into tickets"). Tickets can be epics (containers for
+  related work, with progress), user stories and other types, and filed under an epic
+  (e.g. "create an epic for checkout", "add a story to the Checkout epic", "how far along
+  is the epic?").
 compatibility: Requires the PROJECTLAYER_API_TOKEN environment variable and network access to projectlayer.app.
 ---
 
@@ -88,7 +91,9 @@ handling each time. From the skill directory:
 ```bash
 python scripts/projectlayer.py list-projects
 python scripts/projectlayer.py list-tasks [--project N] [--has-plan] [--status S[,S...]] \
-                                          [--test-outcome O] [--limit N]
+                                          [--test-outcome O] [--type T[,T...]] \
+                                          [--epic ID|KEY|none] [--limit N]
+python scripts/projectlayer.py list-epics [--project N] [--include-finished]
 python scripts/projectlayer.py get-task <id-or-task-key>          # e.g. 42 or API-42
 python scripts/projectlayer.py update-status <id-or-task-key> <status>
 python scripts/projectlayer.py set-plan <id-or-task-key> --file plan.md   # or pipe via stdin
@@ -100,18 +105,20 @@ python scripts/projectlayer.py record-result <id-or-task-key> <result-id> <pass|
 python scripts/projectlayer.py sign-off <id-or-task-key>
 python scripts/projectlayer.py create-task --project N --title TEXT [--description-file PATH] \
                                            [--priority P] [--type T] [--assignee N] \
-                                           [--milestone N] [--plan-file PATH]
+                                           [--milestone N] [--plan-file PATH] \
+                                           [--epic ID|KEY] [--story-points N]
 python scripts/projectlayer.py list-intake [--project N] [--status S[,S...]] [--limit N]
 python scripts/projectlayer.py get-intake <intake-id>
 python scripts/projectlayer.py accept-intake <intake-id>
 python scripts/projectlayer.py reject-intake <intake-id>
 python scripts/projectlayer.py convert-intake <intake-id> [--title TEXT] [--description-file PATH] \
-                                              [--priority P] [--type T] [--assignee N] [--milestone N]
+                                              [--priority P] [--type T] [--assignee N] [--milestone N] \
+                                              [--epic ID|KEY] [--story-points N]
 ```
 
 Each prints JSON. On error it prints a clear message to stderr and exits non-zero; exit
 code **3** means the ProjectLayer server doesn't support the feature yet (test steps — see
-B5 — or processing Intake items — see Flow F). `update-status`, `set-plan`,
+B5 — processing Intake items — see Flow F — or epics — see Flow E). `update-status`, `set-plan`,
 `set-test-steps`, `record-result`, `sign-off`, `create-task`, `accept-intake`,
 `reject-intake` and `convert-intake` are the write operations; the rest are read-only. The list commands fetch every page, so what they
 return is the complete list, not just the first page.
@@ -382,9 +389,13 @@ raising a duplicate.
   server sanitizes it). Say what's wrong or wanted, where, how to reproduce or what done
   looks like, and anything already ruled out. Take it from the conversation and code —
   never invent causes.
-- **Type** (`feature`, `bug`, `task`, `investigation`, `idea`) and **priority** (`low`,
-  `medium`, `high`, `critical`). Default `task` / `medium`; only go above `high` if the user
-  says so.
+- **Type** — `epic`, `user_story`, `feature`, `bug`, `task`, `investigation` or `idea` — and
+  **priority** (`low`, `medium`, `high`, `critical`). Default `task` / `medium`; only go
+  above `high` if the user says so. Use `user_story` for a user-facing slice of value
+  ("As a shopper I can pay by card"), `epic` for a large body of work that groups several
+  of those (see **Epics** below), and `bug` for a defect.
+- **Story points** (`--story-points`) only if the user gave a number or asked you to
+  estimate; never invent one.
 - Don't set an assignee or milestone unless the user named one.
 
 Show the draft and confirm before creating, unless they've said to just do it. Then:
@@ -396,6 +407,28 @@ python scripts/projectlayer.py create-task --project N --title "..." \
 
 The response is the new task; report its `task_key`. If the user wants it planned or built
 next, carry on with Flow A or B using that task.
+
+### Epics
+
+An **epic** is a container for a large body of work. The hierarchy is
+**Epic → item (user story, task, bug…) → subtask**.
+
+- Create an epic with `create-task --type epic`. Give it a clear outcome as its title and
+  describe the goal and scope in the description; don't put steps in it — those are its
+  stories.
+- To put work under an epic, find it with `list-epics --project N` and pass
+  `--epic <id-or-key>` to `create-task` (or `convert-intake`). Check the epic's title
+  matches what the user means before filing under it; if there's no fitting epic, say so
+  and offer to create one rather than leaving the story loose.
+- `list-tasks --epic <id-or-key>` lists an epic's items; `--epic none` lists items with no
+  epic. `get-task <epic>` includes `epic_progress` (items and story points, done and total).
+- Epics are containers, not planned work: they never go on the board, in a sprint or on the
+  Product Backlog, so don't try to plan, estimate or build an epic itself — work through
+  its stories (Flow A/B). An epic can't belong to another epic, a subtask uses its
+  parent's epic (set it on the parent), and a task with subtasks can't become an epic.
+- An epic can't be marked `done`/`closed` while any item is unfinished (409 lists them).
+  Finish or move those first; don't force it.
+- Exit code **3** from these commands means the server doesn't support epics yet.
 
 ---
 
@@ -472,6 +505,9 @@ python scripts/projectlayer.py convert-intake <id> \
   Include the level, culprit, event count and Sentry link in your HTML — or omit it to keep
   the item's text (a link back to the source is always appended).
 - Don't pass `--assignee` or `--milestone` unless the user named them.
+- If the bug belongs to an existing epic (see **Epics** in Flow E), pass `--epic`. Use
+  `--type user_story` and `--story-points` only when that's what the item really is and
+  the user wants it pointed.
 
 The response contains the new `task` (with its `task_key`). Converting an already
 converted item returns `409` with the existing task, so a retry is safe.
@@ -511,6 +547,9 @@ left open and gets a comment; don't treat that as a reason to close it.
   - `create-task` → `POST /api/v1/tasks`. Creates a task reported by the API key's user;
     `project_id` and `title` are required. `description` is HTML and `claude_plan` is
     Markdown.
+  - Epics: `create-task --epic` sends `epic_id` and `--story-points` sends `story_points`;
+    `list-tasks --type/--epic` send `type` and `epic_id`. `list-epics` reads epics from
+    `GET /api/v1/tasks?type=epic` and each one's `epic_progress` from its task detail.
   - `accept-intake` / `reject-intake` → `POST /api/v1/backlog/{id}/accept|reject`, only
     for a `pending` item (409 otherwise). `convert-intake` → `POST
     /api/v1/backlog/{id}/convert` for a `pending` or `accepted` item, with optional
