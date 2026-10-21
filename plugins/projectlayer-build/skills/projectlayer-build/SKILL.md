@@ -281,6 +281,10 @@ Good steps:
 - Cover what the task asked for, including the obvious edge case (empty list, wrong
   input), but stay under a dozen or so steps. The API allows at most 50, and each field up
   to 2000 characters.
+- **Write for the client too.** If the project belongs to a client, the team can publish
+  the task for the client's acceptance testing, and the client then follows these exact
+  steps. Keep them free of internal detail (staff-only pages, admin logins, internal
+  ticket numbers, names of colleagues), and phrase them so a customer could follow them.
 
 Show the steps to the user before sending them, unless they've said to just do it. Then:
 

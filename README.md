@@ -56,6 +56,9 @@ the `backlog.manage` permission.
 It also understands **epics and user stories**: it can create epics, file stories and bugs under
 them (from scratch or when converting Intake items), list an epic's work and show its progress.
 
+Test steps it writes are kept suitable for a client to follow, since teams using the client
+portal can publish a task's test steps to their customer for acceptance testing (1.6.0).
+
 **Setup:** you need a **write-scoped** API token from your
 [projectlayer.app](https://projectlayer.app) account (Settings → API Keys).
 
